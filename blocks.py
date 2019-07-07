@@ -3,8 +3,9 @@
 import math
 import random
 
-from PIL.Image import Image
+import cairo
 
+# == ABOUT: MODEL ==
 # All angles are in radians, i.e., in [0, 2pi).
 # All blocks have size 1×1×1.
 # Coordinate system is:
@@ -13,11 +14,73 @@ from PIL.Image import Image
 #  ——+—→
 #    | x
 # 90° rotation usually maps (x,y) to (-y,x).
+# The 3D coordinate system is right-handed.
 
-
+# == CONFIG: GENERATION ==
 N_BLOCKS = 20
 BLOCK_POS_VARIANCE = math.sqrt(N_BLOCKS) / 2
 
+# == CONFIG: RENDERING ==
+CAMERA_POS = (-3, -10, 3)
+IMAGE_RES = (800, 600)
+# Length of 1 unit on projection plane (which has distance 1 from the camera)
+# in terms of pixels on the image:
+CAMERA_SCALE = 500
+CAMERA_LOOKAT = (0, 0, 1)
+
+
+# == CODE: MATH ==
+
+def vec_sqd(dxyz):
+    dx, dy, dz = dxyz
+    return dx * dx + dy * dy + dz * dz
+
+
+def vec_scale(dxyz, factor):
+    dx, dy, dz = dxyz
+    return dx * factor, dy * factor, dz * factor
+
+
+def vec_normalize(dxyz):
+    return vec_scale(dxyz, 1 / math.sqrt(vec_sqd(dxyz)))
+
+
+def vec_sub(dxyz1, dxyz2):
+    x1, y1, z1 = dxyz1
+    x2, y2, z2 = dxyz2
+    return x1 - x2, y1 - y2, z1 - z2
+
+
+def vec_scalar(dxyz1, dxyz2):
+    x1, y1, z1 = dxyz1
+    x2, y2, z2 = dxyz2
+    return x1 * x2 + y1 * y2 + z1 * z2
+
+
+def vec_cross(dxyz1, dxyz2):
+    x1, y1, z1 = dxyz1
+    x2, y2, z2 = dxyz2
+    return y1 * z2 - y2 * z1, z1 * x2 - z2 * x1, x1 * y2 - x2 * y1
+
+
+CAMERA_FRONT = vec_normalize(vec_sub(CAMERA_LOOKAT, CAMERA_POS))
+CAMERA_UP_PRE = (0, 1, 0)
+CAMERA_RIGHT = vec_normalize(vec_cross(CAMERA_FRONT, CAMERA_UP_PRE))
+# assert vec_sqd(vec_cross(CAMERA_FRONT, CAMERA_UP_PRE)) >= 0.01
+# Violated on sharp up or down perspectives.
+CAMERA_UP = vec_normalize(vec_cross(CAMERA_RIGHT, CAMERA_FRONT))
+
+
+def vec_project(dxyz):
+    dxyz = vec_sub(dxyz, CAMERA_POS)
+    img_x = vec_scalar(dxyz, CAMERA_RIGHT)
+    img_y = vec_scalar(dxyz, CAMERA_UP)
+    img_z = vec_scalar(dxyz, CAMERA_FRONT)
+    # … also known as "matrix multiplication".  I know.
+    return img_x, img_y, img_z
+
+
+# == CODE: BUSINESS ==
 
 class Block:
     def __init__(self, x, y, a, z=0):
@@ -91,6 +154,9 @@ def compute_blocks():
 
 
 def render_blocks(blocks):
+    surface = cairo.ImageSurface(cairo.FORMAT_RGB24, *IMAGE_RES)
+    ctx = cairo.Context(surface)
+    ctx.scale(*IMAGE_RES)
     raise NotImplementedError()
 
 
