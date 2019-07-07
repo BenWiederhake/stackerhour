@@ -1,2 +1,1 @@
-Pillow>=5.4.1
 pycairo>=1.16.2
