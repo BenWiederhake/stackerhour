@@ -15,7 +15,8 @@ from PIL.Image import Image
 # 90° rotation usually maps (x,y) to (-y,x).
 
 
-BLOCK_POS_VARIANCE = 3.
+N_BLOCKS = 20
+BLOCK_POS_VARIANCE = math.sqrt(N_BLOCKS) / 2
 
 
 class Block:
@@ -72,7 +73,21 @@ class Block:
 
 
 def compute_blocks():
-    raise NotImplementedError()
+    blocks_by_level = []
+    for _ in range(N_BLOCKS):
+        b = Block.new_random()
+        while True:
+            if len(blocks_by_level) <= b.z:
+                blocks_by_level.append([b])
+                # It's the only block on that level → Done!
+                break
+            if not any(lb.is_intersecting(b) for lb in blocks_by_level[b.z]):
+                # It doesn't intersect anymore → Done!
+                blocks_by_level[b.z].append(b)
+                break
+            # It intersects with something → Go one level up.
+            b.z += 1
+    return [b for l in blocks_by_level for b in l]
 
 
 def render_blocks(blocks):
