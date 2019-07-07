@@ -5,6 +5,10 @@
 This is not really a library, but rather a bad attempt to recreate the "stacking" aspects of the "Stackerday" scene I saw decades ago in POV-Ray.
 I can't find any original image anymore, but there is a [forum thread](https://forums.oculusvr.com/de/discussion/comment/340083/) which uses it.
 
+Here's how the process of debugging looked like:
+
+![](history.gif)
+
 ## Table of Contents
 
 - [Install](#install)
@@ -27,7 +31,6 @@ This leads to crazy artifacts if things are *behind* your camera.
 ## TODOs
 
 * Fix intersections.  Apparently I haven't fixed *all* causes yet.
-* Make a nice (possibly low-res) gif from `history/`.
 * Make the boxes look more like letter blocks.
 
 ## NOTDOs
