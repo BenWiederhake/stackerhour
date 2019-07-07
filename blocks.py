@@ -17,20 +17,28 @@ import cairo
 # The 3D coordinate system is right-handed.
 
 # == CONFIG: GENERATION ==
-N_BLOCKS = 200
-BLOCK_POS_SIGMA = math.sqrt(N_BLOCKS) / 2
+N_BLOCKS = 100
+BLOCK_POS_SIGMA = 7
 
 # == CONFIG: RENDERING ==
-CAMERA_POS = (-1, -20, 6)
+CAMERA_POS = (-2, -20, 6)
 IMAGE_WIDTH = 1920
 IMAGE_HEIGHT = 1024
 BLOCK_RGB_MU = 0.5
-BLOCK_RGB_SIGMA = 0.25
+BLOCK_RGB_SIGMA = 0.19
 NORMAL_RGB_IMPACT = 0.1
 # Length of 1 unit on projection plane (which has distance 1 from the camera)
 # in terms of pixels on the image:
-CAMERA_SCALE = 700
+CAMERA_SCALE = 1000
 CAMERA_LOOKAT = (0, 0, 0)
+
+BACKGROUND_X = 31
+BACKGROUND_Y = 31
+BACKGROUND_STEP = 1
+BACKGROUND_W = 0.95
+BACKGROUND_H = 0.95
+BACKGROUND_Z = -0.01
+BACKGROUND_META = (0.85, 0.86, 0.83)
 
 
 # == CODE: MATH ==
@@ -77,6 +85,7 @@ CAMERA_FRONT = vec_normalize(vec_sub(CAMERA_LOOKAT, CAMERA_POS))
 CAMERA_UP_PRE = (0, 0, 1)
 CAMERA_RIGHT = vec_normalize(vec_cross(CAMERA_FRONT, CAMERA_UP_PRE))
 CAMERA_UP = vec_normalize(vec_cross(CAMERA_RIGHT, CAMERA_FRONT))
+CAMERA_CUTOFF = 0.7501  # Minimal distance at which things need to be.
 
 print(f'· {CAMERA_FRONT}')
 print(f'→ {CAMERA_RIGHT}')
@@ -191,6 +200,11 @@ def compute_rects(blocks):
     '''
     rects = []
     for b in blocks:
+        plane_distance = vec_project((b.x, b.y, b.z + 0.5))[2]
+        if plane_distance <= CAMERA_CUTOFF:
+            # Don't render this block, it's too close to the camera.
+            continue
+
         c1b, c2b, c3b, c4b = [(cx, cy, b.z) for cx, cy in b.corners()]
         c1t, c2t, c3t, c4t = [(cx, cy, b.z + 1) for cx, cy in b.corners()]
         # Bottom
@@ -219,12 +233,26 @@ def project_rect(rect):
 def compute_paint_order(blocks):
     paint_rects = []
     for rect, b in compute_rects(blocks):
-        projected, depth = project_rect(rect)
+        b_depth = distance = vec_project((b.x, b.y, b.z + 0.5))[2]  # TODO: Duplicate computation!
+        projected, rect_depth = project_rect(rect)
         rect_normal = vec_cross(vec_sub(rect[1], rect[0]), vec_sub(rect[2], rect[1]))
         assert 0.99 <= vec_sqd(rect_normal) <= 1.01, (rect_normal, vec_sqd(rect_normal), rect, b)
         meta = block_to_rgb(b, rect_normal)
-        paint_rects.append((depth, projected, meta))
+        paint_rects.append((b_depth, rect_depth, projected, meta))
+    for bg_x in range(BACKGROUND_X):
+        for bg_y in range(BACKGROUND_Y):
+            base_x = (bg_x - (BACKGROUND_X - 0.5) / 2) * BACKGROUND_STEP
+            base_y = (bg_y - (BACKGROUND_Y - 0.5) / 2) * BACKGROUND_STEP
+            off_x = BACKGROUND_W / 2
+            off_y = BACKGROUND_H / 2
+            rect = [(base_x + off_x, base_y + off_y, BACKGROUND_Z),
+                    (base_x - off_x, base_y + off_y, BACKGROUND_Z),
+                    (base_x - off_x, base_y - off_y, BACKGROUND_Z),
+                    (base_x + off_x, base_y - off_y, BACKGROUND_Z)]
+            projected, rect_depth = project_rect(rect)
+            paint_rects.append((rect_depth, rect_depth, projected, BACKGROUND_META))
     paint_rects.sort(reverse=True)
+    paint_rects = [e[2:] for e in paint_rects]
     return paint_rects
 
 
@@ -234,7 +262,7 @@ def render_blocks(blocks):
     ctx.translate(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2)
     ctx.scale(CAMERA_SCALE, CAMERA_SCALE)
 
-    for _, rect, rgb in compute_paint_order(blocks):
+    for rect, rgb in compute_paint_order(blocks):
         ctx.move_to(*rect[0])
         ctx.line_to(*rect[1])
         ctx.line_to(*rect[2])
@@ -249,7 +277,15 @@ def render_blocks(blocks):
 
 def run():
     blocks = compute_blocks()
-    #blocks = [Block(0, 0, 0), Block(1, 0, 0), Block(0, 1, 0)]
+    # a = 45 * math.pi / 180
+    # blocks = [
+    #     Block(-4, -4, a), Block(-2, -4, a), Block(0, -4, a), Block(2, -4, a), Block(4, -4, a),
+    #     Block(-4, -2, a), Block(-2, -2, a), Block(0, -2, a), Block(2, -2, a), Block(4, -2, a),
+    #     Block(-4,  0, a), Block(-2,  0, a), Block(0,  0, a), Block(2,  0, a), Block(4,  0, a),
+    #     Block(-4,  2, a), Block(-2,  2, a), Block(0,  2, a), Block(2,  2, a), Block(4,  2, a),
+    #     Block(-4,  4, a), Block(-2,  4, a), Block(0,  4, a), Block(2,  4, a), Block(4,  4, a),
+    #     Block(0, -20, a, z=4),
+    # ]
     surface = render_blocks(blocks)
     surface.write_to_png("stackerhour.png")
 

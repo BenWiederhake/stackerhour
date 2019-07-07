@@ -30,7 +30,7 @@ This leads to crazy artifacts if things are *behind* your camera.
 
 ## TODOs
 
-* Fix intersections.  Apparently I haven't fixed *all* causes yet.
+* Fix intersections.  The paint-order calculation only takes the centers into account.  How to fix that?
 * Make the boxes look more like letter blocks.
 
 ## NOTDOs
