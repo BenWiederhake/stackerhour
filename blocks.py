@@ -17,16 +17,20 @@ import cairo
 # The 3D coordinate system is right-handed.
 
 # == CONFIG: GENERATION ==
-N_BLOCKS = 20
-BLOCK_POS_VARIANCE = math.sqrt(N_BLOCKS) / 2
+N_BLOCKS = 200
+BLOCK_POS_SIGMA = math.sqrt(N_BLOCKS) / 2
 
 # == CONFIG: RENDERING ==
-CAMERA_POS = (-3, -10, 3)
-IMAGE_RES = (800, 600)
+CAMERA_POS = (-1, -20, 6)
+IMAGE_WIDTH = 1920
+IMAGE_HEIGHT = 1024
+BLOCK_RGB_MU = 0.5
+BLOCK_RGB_SIGMA = 0.25
+NORMAL_RGB_IMPACT = 0.1
 # Length of 1 unit on projection plane (which has distance 1 from the camera)
 # in terms of pixels on the image:
-CAMERA_SCALE = 500
-CAMERA_LOOKAT = (0, 0, 1)
+CAMERA_SCALE = 700
+CAMERA_LOOKAT = (0, 0, 0)
 
 
 # == CODE: MATH ==
@@ -43,6 +47,12 @@ def vec_scale(dxyz, factor):
 
 def vec_normalize(dxyz):
     return vec_scale(dxyz, 1 / math.sqrt(vec_sqd(dxyz)))
+
+
+def vec_add(dxyz1, dxyz2):
+    x1, y1, z1 = dxyz1
+    x2, y2, z2 = dxyz2
+    return x1 + x2, y1 + y2, z1 + z2
 
 
 def vec_sub(dxyz1, dxyz2):
@@ -64,20 +74,32 @@ def vec_cross(dxyz1, dxyz2):
 
 
 CAMERA_FRONT = vec_normalize(vec_sub(CAMERA_LOOKAT, CAMERA_POS))
-CAMERA_UP_PRE = (0, 1, 0)
+CAMERA_UP_PRE = (0, 0, 1)
 CAMERA_RIGHT = vec_normalize(vec_cross(CAMERA_FRONT, CAMERA_UP_PRE))
-# assert vec_sqd(vec_cross(CAMERA_FRONT, CAMERA_UP_PRE)) >= 0.01
-# Violated on sharp up or down perspectives.
 CAMERA_UP = vec_normalize(vec_cross(CAMERA_RIGHT, CAMERA_FRONT))
+
+print(f'· {CAMERA_FRONT}')
+print(f'→ {CAMERA_RIGHT}')
+print(f'↑ {CAMERA_UP}')
+assert 0.999 < vec_sqd(CAMERA_FRONT) < 1.001
+assert 0.999 < vec_sqd(CAMERA_RIGHT) < 1.001
+assert 0.999 < vec_sqd(CAMERA_UP) < 1.001
+assert -0.001 < vec_scalar(CAMERA_FRONT, CAMERA_RIGHT) < 0.001
+assert -0.001 < vec_scalar(CAMERA_UP, CAMERA_RIGHT) < 0.001
+assert -0.001 < vec_scalar(CAMERA_FRONT, CAMERA_UP) < 0.001
 
 
 def vec_project(dxyz):
     dxyz = vec_sub(dxyz, CAMERA_POS)
-    img_x = vec_scalar(dxyz, CAMERA_RIGHT)
-    img_y = vec_scalar(dxyz, CAMERA_UP)
     img_z = vec_scalar(dxyz, CAMERA_FRONT)
-    # … also known as "matrix multiplication".  I know.
+    img_x = vec_scalar(dxyz, CAMERA_RIGHT) / img_z
+    img_y = -vec_scalar(dxyz, CAMERA_UP) / img_z
+    # … also known as "matrix multiplication in homomorphic coordinates".  I know.
     return img_x, img_y, img_z
+
+
+def clamp_rgbish(val):
+    return max(0.0, min(val * 1.0, 1.0))
 
 
 # == CODE: BUSINESS ==
@@ -93,7 +115,7 @@ class Block:
 
     def is_intersecting(self, other):
         assert self.z == other.z, 'Caller needs to ensure that'
-        sqdist = (self.x - other.x) ** 2 + (self.y + other.y) ** 2
+        sqdist = (self.x - other.x) ** 2 + (self.y - other.y) ** 2
         if sqdist <= 1:
             # Minimum diameter is 1 each, so they *must* intersect.
             return True
@@ -108,8 +130,8 @@ class Block:
         # contained in the other".
         # Before we checked the distances, this was not true: The squares could
         # be for example in the same spot, rotated 0° and 45° respectively.
-        return any(self.contains(c) for c in other.corners) \
-            or any(other.contains(c) for c in self.corners)
+        return any(self.contains(c) for c in other.corners()) \
+            or any(other.contains(c) for c in self.corners())
 
     def contains(self, p):
         px, py = p
@@ -120,19 +142,28 @@ class Block:
         # the length of the vector (ex, ey), which is 0.5.
         return -0.25 <= e1_dist <= 0.25 and -0.25 <= e2_dist <= 0.25
 
-    @property
     def corners(self):
         u, v = self.cx, self.cy
         x, y = self.x, self.y
-        return [(x + u, y + v), (x - v, y + u), (x - u, y - u), (x + v, y - u)]
+        return [(x + u, y + v), (x - v, y + u), (x - u, y - v), (x + v, y - u)]
 
     @staticmethod
     def new_random():
-        return Block(random.gauss(0, BLOCK_POS_VARIANCE), random.gauss(0, BLOCK_POS_VARIANCE),
+        return Block(random.gauss(0, BLOCK_POS_SIGMA), random.gauss(0, BLOCK_POS_SIGMA),
                      random.random() * 2 * math.pi)
 
     def __repr__(self):
         return 'Block(x={}, y={}, a={}, z={})'.format(self.x, self.y, self.a, self.z)
+
+
+def block_to_rgb(b, rect_normal):
+    r = random.Random(b)
+    garg = (BLOCK_RGB_MU, BLOCK_RGB_SIGMA)
+    # Warm up rng, just in case.
+    r.gauss(*garg)
+    r.gauss(*garg)
+    return [clamp_rgbish(r.gauss(*garg) + rect_normal[i] * NORMAL_RGB_IMPACT)
+            for i in range(3)]
 
 
 def compute_blocks():
@@ -153,17 +184,74 @@ def compute_blocks():
     return [b for l in blocks_by_level for b in l]
 
 
+def compute_rects(blocks):
+    '''
+    Yields rectangles whose outside face is counter-clockwise.
+    Specifically, yields (rectangle, block) tuples.
+    '''
+    rects = []
+    for b in blocks:
+        c1b, c2b, c3b, c4b = [(cx, cy, b.z) for cx, cy in b.corners()]
+        c1t, c2t, c3t, c4t = [(cx, cy, b.z + 1) for cx, cy in b.corners()]
+        # Bottom
+        rects.append(([c1b, c2b, c3b, c4b], b))
+        # Top
+        rects.append(([c4t, c3t, c2t, c1t], b))
+        # Sides
+        rects.append(([c1t, c4t, c4b, c1b], b))
+        rects.append(([c2t, c1t, c1b, c2b], b))
+        rects.append(([c3t, c2t, c2b, c3b], b))
+        rects.append(([c4t, c3t, c3b, c4b], b))
+    return rects
+
+
+def project_rect(rect):
+    '''
+    Projects a rect onto the projection plane, and gives
+    the depth at the actual center of the rectangle.
+    '''
+    a, _, c, _ = rect
+    center = vec_scale(vec_add(a, c), 0.5)
+    projected = [vec_project(v)[:2] for v in rect]
+    return (projected, vec_project(center)[2])
+
+
+def compute_paint_order(blocks):
+    paint_rects = []
+    for rect, b in compute_rects(blocks):
+        projected, depth = project_rect(rect)
+        rect_normal = vec_cross(vec_sub(rect[1], rect[0]), vec_sub(rect[2], rect[1]))
+        assert 0.99 <= vec_sqd(rect_normal) <= 1.01, (rect_normal, vec_sqd(rect_normal), rect, b)
+        meta = block_to_rgb(b, rect_normal)
+        paint_rects.append((depth, projected, meta))
+    paint_rects.sort(reverse=True)
+    return paint_rects
+
+
 def render_blocks(blocks):
-    surface = cairo.ImageSurface(cairo.FORMAT_RGB24, *IMAGE_RES)
+    surface = cairo.ImageSurface(cairo.FORMAT_RGB24, IMAGE_WIDTH, IMAGE_HEIGHT)
     ctx = cairo.Context(surface)
-    ctx.scale(*IMAGE_RES)
-    raise NotImplementedError()
+    ctx.translate(IMAGE_WIDTH / 2, IMAGE_HEIGHT / 2)
+    ctx.scale(CAMERA_SCALE, CAMERA_SCALE)
+
+    for _, rect, rgb in compute_paint_order(blocks):
+        ctx.move_to(*rect[0])
+        ctx.line_to(*rect[1])
+        ctx.line_to(*rect[2])
+        ctx.line_to(*rect[3])
+        ctx.close_path()
+        ctx.set_source_rgb(*rgb)
+        ctx.set_line_width(0.02)
+        ctx.fill()
+
+    return surface
 
 
 def run():
     blocks = compute_blocks()
-    img = render_blocks(blocks)
-    img.save('blocks.png')
+    #blocks = [Block(0, 0, 0), Block(1, 0, 0), Block(0, 1, 0)]
+    surface = render_blocks(blocks)
+    surface.write_to_png("stackerhour.png")
 
 
 if __name__ == '__main__':
